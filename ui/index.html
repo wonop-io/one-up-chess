@@ -129,6 +129,11 @@
   .seg button[aria-pressed="true"] { background: var(--wm-fill-strong); }
   .actions { display: flex; gap: 6px; }
   .actions button { flex: 1; }
+  .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+  .field input { font-size: 15px; }
+  .legal { margin: 0; font-size: 13px; line-height: 19px; color: var(--wm-text-dim); max-height: 96px; overflow-y: auto; }
+  .label { margin: 0; font-size: 11px; color: var(--wm-text-dim); }
+  .fen { margin: 0; font: 11px ui-monospace, monospace; color: var(--wm-text-dim); user-select: all; overflow-wrap: anywhere; }
   wm-notice { flex: none; }
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 </style>
@@ -157,6 +162,11 @@
     <aside id="panel" hidden aria-label="Game panel">
       <h2>Chess</h2>
       <p class="who" id="context"></p>
+      <form class="field" id="moveForm" autocomplete="off">
+        <label for="moveInput">Type a move</label>
+        <input id="moveInput" name="move" placeholder="e2e4 or Nf3" aria-describedby="legal" spellcheck="false" />
+      </form>
+      <p class="legal" id="legal" aria-live="off"></p>
       <ol class="moves" id="moves" aria-label="Moves played"></ol>
       <div class="confirm" id="confirm" role="group" aria-label="New game">
         <p>Start a new game, playing</p>
@@ -169,6 +179,14 @@
           <button type="button" class="primary" id="startNew">Start</button>
         </div>
       </div>
+      <div class="field" role="group" aria-labelledby="seatLabel">
+        <p class="label" id="seatLabel">This board plays</p>
+        <div class="seg" id="seat">
+          <button type="button" data-side="white" aria-pressed="true">White</button>
+          <button type="button" data-side="black" aria-pressed="false">Black</button>
+        </div>
+      </div>
+      <p class="fen" id="fen" aria-label="Position as FEN"></p>
       <div class="actions" id="mainActions">
         <button type="button" id="newGame">New game</button>
       </div>
@@ -194,8 +212,13 @@
   let lastAnnounced = "";
   let flash = "";          // why the last click did nothing; cleared by the next one
 
-  const hostColor = () => (state?.host === "black" ? "b" : "w");
-  const myTurn = () => state && !state.over && state.toMoveIs === "host";
+  // Which side this window moves: the host's unless someone picks another,
+  // so a computer-use agent can play the assistant's side on its own board.
+  let seat = null;
+  const seatSide = () => seat ?? state?.host ?? "white";
+  const seatColor = () => (seatSide() === "black" ? "b" : "w");
+  const cap = (s) => s[0].toUpperCase() + s.slice(1);
+  const myTurn = () => state && !state.over && state.turn === seatSide();
 
   function pieceAt(sq) {
     const f = FILES.indexOf(sq[0]);
@@ -210,7 +233,7 @@
   // Squares in the order they are drawn: the host's side at the bottom.
   function drawOrder() {
     const out = [];
-    const flip = hostColor() === "b";
+    const flip = seatColor() === "b";
     for (let row = 0; row < 8; row++) {
       for (let col = 0; col < 8; col++) {
         const r = flip ? row : 7 - row;
@@ -258,7 +281,7 @@
         if (last.includes(sq)) b.classList.add("last");
         if (sq === selected) b.classList.add("sel");
         if (sq === checked) b.classList.add("check");
-        if (p && colorOf(p) === hostColor() && myTurn()) b.classList.add("mine");
+        if (p && colorOf(p) === seatColor() && myTurn()) b.classList.add("mine");
         const isTarget = targetSet.has(sq);
         if (isTarget) {
           b.classList.add("target");
@@ -290,7 +313,14 @@
     }
     if (hadFocus) boardEl.querySelector(`[data-sq="${focusSq}"]`)?.focus();
 
-    $("context").textContent = `You play ${state.host}, the assistant plays ${state.assistant}`;
+    $("context").textContent = `This board plays ${seatSide()}. The host is ${state.host}, the assistant ${state.assistant}.`;
+    for (const b of $("seat").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.side === seatSide()));
+    $("fen").textContent = state.fen;
+    $("legal").textContent = state.over
+      ? "No legal moves: the game is over."
+      : myTurn()
+        ? `Legal moves for ${cap(state.turn)}: ${state.legalMoves.map((m) => m.san).join(", ")}`
+        : `${cap(state.turn)} to move. This board plays ${seatSide()}.`;
     const status = $("status");
     status.textContent = "";
     const dot = document.createElement("span");
@@ -308,7 +338,7 @@
       li.className = "empty";
       li.style.display = "block";
       li.style.background = "none";
-      li.textContent = state.toMoveIs === "host" ? "Make the first move." : "The assistant moves first.";
+      li.textContent = myTurn() ? "Make the first move." : `${cap(state.turn)} moves first.`;
       list.appendChild(li);
     } else {
       // Number from the starting position, so a game set up from a FEN reads right.
@@ -338,7 +368,7 @@
   function hintText() {
     if (flash) return flash;
     if (state.over) return state.result === "1/2-1/2" ? "Result ½–½." : `Result ${state.result}.`;
-    if (!myTurn()) return "Waiting for the assistant to move.";
+    if (!myTurn()) return `Waiting for ${cap(state.turn)} to move.`;
     if (pendingPromo) return "Choose a piece, or press Escape.";
     if (selected) {
       const n = movesFrom(selected).length;
@@ -393,11 +423,11 @@
         return;
       }
     }
-    if (p && colorOf(p) === hostColor()) {
+    if (p && colorOf(p) === seatColor()) {
       if (!myTurn()) {
         selected = null;
         if (state.over) say("The game is over. Start a new game to play again.");
-        else say(`It is ${state.turn === "white" ? "White" : "Black"}'s turn. Wait for the assistant to move.`);
+        else say(`It is ${cap(state.turn)}'s turn. This board plays ${seatSide()}.`);
         render();
         return;
       }
@@ -410,7 +440,7 @@
     } else if (selected && myTurn()) {
       say(`Not a legal move: the ${describePiece(pieceAt(selected))} on ${selected} cannot go to ${sq}.`);
     } else if (p) {
-      say(`That is a ${describePiece(p)}. You play ${state.host}.`);
+      say(`That is a ${describePiece(p)}. This board plays ${seatSide()}.`);
     }
     selected = null;
     render();
@@ -441,7 +471,7 @@
     selected = null;
     pendingPromo = null;
     showNotice("");
-    wm.post({ type: "move", move: uci });
+    wm.post({ type: "move", move: uci, side: seatSide() });
     render();
   }
 
@@ -524,6 +554,7 @@
       const changed = prevKey !== state.fen + state.moves.length;
       if (changed) {
         flash = "";
+        if (msg.type === "state") $("moveInput").value = "";
         selected = null;
         pendingPromo = null;
         if (msg.type === "state") showNotice("");
@@ -535,6 +566,25 @@
       const lm = state.lastMove;
       announce(lm ? `${lm.side === "white" ? "White" : "Black"} played ${lm.san}. ${state.sentence}` : state.sentence);
     }
+  });
+
+  $("moveForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const text = $("moveInput").value.trim();
+    if (!text || !state) return;
+    selected = null;
+    pendingPromo = null;
+    showNotice("");
+    // The isolate checks it: a wrong side, an illegal move or a typo comes back refused.
+    wm.post({ type: "move", move: text, side: seatSide() });
+  });
+  $("seat").addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b || !state) return;
+    seat = b.dataset.side === state.host ? null : b.dataset.side;
+    selected = null;
+    flash = "";
+    render();
   });
 
   function setPanel(open) {

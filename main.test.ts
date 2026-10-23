@@ -189,7 +189,7 @@ Deno.test("draws by insufficient material, repetition and the fifty-move rule", 
   assertEquals(play("Ra2").sentence, "Draw by the fifty-move rule.");
 });
 
-Deno.test("the window moves only the host's pieces, and says why it refused", async () => {
+Deno.test("a window moves only the side it plays, and says why it refused", async () => {
   const h = await harness();
   h.spec.onMessage({ payload: { type: "move", move: "e2e4" }, windowId: "w1" });
   assertEquals(h.c.state().lastMove, { uci: "e2e4", san: "e4", side: "white", by: "host" });
@@ -199,6 +199,17 @@ Deno.test("the window moves only the host's pieces, and says why it refused", as
   assertEquals(h.posts[0].message, "It is Black's turn, not White's.");
   assertEquals(h.c.move({ move: "e5", side: "black" }).lastMove.by, "assistant");
   assertEquals(h.emitted, [["moves", "White played e4"], ["moves", "Black played e5"]]);
+  // A window set to play Black, with a typed move: illegal first, then legal.
+  h.posts.length = 0;
+  h.spec.onMessage({ payload: { type: "move", move: "Nf6", side: "black" }, windowId: "w2" });
+  assertEquals(h.posts[0].message, "It is White's turn, not Black's.");
+  h.c.move({ move: "Nf3" });
+  const fen = h.c.state().fen;
+  h.spec.onMessage({ payload: { type: "move", move: "Ke6", side: "black" }, windowId: "w2" });
+  assertEquals(h.posts[h.posts.length - 1].type, "refused");
+  assertEquals(h.c.state().fen, fen, "a refused move changes nothing");
+  h.spec.onMessage({ payload: { type: "move", move: "Nf6", side: "black" }, windowId: "w2" });
+  assertEquals(h.c.state().lastMove, { uci: "g8f6", san: "Nf6", side: "black", by: "assistant" });
 });
 
 Deno.test("the game survives a reload, and a new game can give the host Black", async () => {

@@ -681,10 +681,12 @@ app.define({
       app.ui.post({ type: "state", state: describe() }, windowId);
       return;
     }
-    // The window is the host's board: it may only move the host's pieces.
+    // A window moves the side it plays (the host's unless it chose another),
+    // and only on that side's turn.
     if (msg?.type === "move") {
       try {
-        playMove(msg.move, game.hostSide, "host");
+        const side = parseSide(msg.side, "side") ?? game.hostSide;
+        playMove(msg.move, side, side === game.hostSide ? "host" : "assistant");
       } catch (e: any) {
         app.ui.post({ type: "refused", message: e?.message ?? String(e), state: describe() }, windowId);
       }
