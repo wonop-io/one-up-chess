@@ -1,23 +1,59 @@
 <!doctype html>
 <meta charset="utf-8" />
 <style>
-  html, body { height: 100%; margin: 0; background: var(--wm-content); }
-  main { display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: var(--wm-content); overflow: hidden; }
+  main { display: flex; flex-direction: column; height: 100vh; }
+  .layout { flex: 1; min-height: 0; display: flex; }
 
-  header {
-    height: 44px; flex: none; display: flex; align-items: center; gap: 10px;
-    padding: 0 116px 0 16px;
+  /* The board takes the whole window. --u is one square's share of the
+     frame: eight squares plus a coordinate gutter on each side (0.55u). */
+  .stage {
+    flex: 1; min-width: 0; position: relative; container-type: size;
+    display: grid; place-items: center;
   }
-  header h1 { margin: 0; font-size: 15px; font-weight: 600; }
-  header p { margin: 0; font-size: 13px; color: var(--wm-text-dim); }
+  .frame {
+    --u: calc(min(100cqw, 100cqh) / 9.1);
+    width: calc(var(--u) * 9.1); height: calc(var(--u) * 9.1);
+    display: grid;
+    grid-template-columns: calc(var(--u) * 0.55) calc(var(--u) * 8) calc(var(--u) * 0.55);
+    grid-template-rows: calc(var(--u) * 0.55) calc(var(--u) * 8) calc(var(--u) * 0.55);
+  }
+  .top {
+    grid-column: 1 / 4; grid-row: 1; min-width: 0;
+    display: flex; align-items: center; gap: 0.6em; padding: 0 calc(var(--u) * 0.55);
+    font-size: clamp(13px, calc(var(--u) * 0.3), 22px); white-space: nowrap; overflow: hidden;
+  }
+  .status { font-weight: 600; flex: none; }
+  .status .dot {
+    display: inline-block; width: 0.5em; height: 0.5em; border-radius: 50%;
+    margin-right: 0.45em; vertical-align: 0.1em; background: var(--wm-signal-attention, #f5b83d);
+  }
+  .status .dot.live { background: var(--wm-signal-live, #34c759); }
+  .status .dot.danger { background: var(--wm-signal-danger, #ff5f57); }
+  .hint { color: var(--wm-text-dim); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 
-  .body { flex: 1; min-height: 0; display: flex; gap: 16px; padding: 0 16px 16px; }
+  /* Coordinates: big, bold and in the text colour, so they read from across a room. */
+  .ranks, .files {
+    display: grid; font-weight: 700; color: var(--wm-text); user-select: none;
+    font-size: max(13px, calc(var(--u) * 0.4)); line-height: 1;
+    font-family: ui-sans-serif, -apple-system, system-ui, sans-serif; font-variant-numeric: tabular-nums;
+  }
+  .ranks { grid-row: 2; grid-template-rows: repeat(8, 1fr); }
+  .ranks span, .files span { display: grid; place-items: center; }
+  .ranks.left { grid-column: 1; }
+  .ranks.right { grid-column: 3; }
+  .files { grid-column: 2; grid-row: 3; grid-template-columns: repeat(8, 1fr); }
+  .corner { grid-column: 3; grid-row: 3; display: grid; place-items: center; }
+  .corner button {
+    width: calc(var(--u) * 0.5); height: calc(var(--u) * 0.5); min-width: 24px; min-height: 24px;
+    padding: 0; display: grid; place-items: center; border-radius: 6px;
+  }
+  .corner svg { width: 60%; height: 60%; }
 
-  .stage { flex: 1; min-width: 0; container-type: size; display: grid; place-items: center; }
   .board {
-    width: min(100cqw, 100cqh); aspect-ratio: 1;
+    grid-column: 2; grid-row: 2;
     display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
-    border-radius: 6px; overflow: hidden;
+    border-radius: 4px; overflow: hidden;
     box-shadow: 0 0 0 0.5px var(--wm-hairline), 0 8px 24px rgb(0 0 0 / 0.25);
   }
   .sq {
@@ -29,9 +65,8 @@
   .sq.dark.last { background: color-mix(in srgb, #a7967a 55%, #d9a93a); }
   .sq.sel { background: color-mix(in srgb, #ebe5d6 40%, #6aa4d8); }
   .sq.dark.sel { background: color-mix(in srgb, #a7967a 40%, #4d8cc8); }
-  .sq.mine { cursor: pointer; }
-  .sq.target { cursor: pointer; }
-  .sq:focus-visible { outline: 3px solid #2f74c0; outline-offset: -3px; z-index: 1; }
+  .sq.mine, .sq.target { cursor: pointer; }
+  .sq:focus-visible { outline: 3px solid #2f74c0; outline-offset: -3px; z-index: 2; }
   .sq.check::before {
     content: ""; position: absolute; inset: 0;
     background: radial-gradient(circle, rgb(255 95 87 / 0.85) 0%, rgb(255 95 87 / 0.45) 40%, transparent 72%);
@@ -46,7 +81,6 @@
   }
   .sq.target:hover::after { background: rgb(20 20 30 / 0.42); }
   .sq.target.capture:hover::after { background: none; border-color: rgb(20 20 30 / 0.45); }
-
   .piece {
     position: relative; z-index: 1; font-size: 78cqmin; line-height: 1;
     font-family: "Apple Symbols", "Segoe UI Symbol", "DejaVu Sans", serif;
@@ -55,62 +89,74 @@
   .piece.w { color: #fbfaf7; -webkit-text-stroke: 1.2cqmin #26221c; text-shadow: 0 1.5cqmin 2cqmin rgb(0 0 0 / 0.35); }
   .piece.b { color: #1f1c18; -webkit-text-stroke: 0.6cqmin #1f1c18; text-shadow: 0 1.5cqmin 2cqmin rgb(0 0 0 / 0.3); }
 
-  .coord { position: absolute; font-size: 11px; font-weight: 600; pointer-events: none; color: #a7967a; }
-  .sq.dark .coord { color: #ebe5d6; }
-  .coord.rank { top: 3px; left: 4px; }
-  .coord.file { bottom: 2px; right: 4px; }
-
-  aside { width: 230px; flex: none; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
-  .status { font-size: 20px; font-weight: 600; line-height: 26px; margin: 0; }
-  .status .dot {
-    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-    margin-right: 8px; vertical-align: 3px; background: var(--wm-signal-attention, #f5b83d);
+  /* Promotion asks over the board, so it works with the panel closed. */
+  .promo {
+    position: absolute; inset: 0; display: none; place-items: center;
+    background: rgb(0 0 0 / 0.35); z-index: 5;
   }
-  .status .dot.live { background: var(--wm-signal-live, #34c759); }
-  .status .dot.danger { background: var(--wm-signal-danger, #ff5f57); }
-  .hint { font-size: 13px; color: var(--wm-text-dim); margin: 0; min-height: 18px; }
+  .promo.open { display: grid; }
+  .promo .card {
+    background: var(--wm-surface); border-radius: 12px; padding: 16px 18px;
+    display: flex; flex-direction: column; gap: 12px; box-shadow: 0 12px 40px rgb(0 0 0 / 0.4);
+  }
+  .promo p { margin: 0; font-size: 15px; font-weight: 600; }
+  .promo .row { display: flex; gap: 8px; }
+  .promo .row button { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 12px; font-size: 13px; }
+  .promo .glyph { font-family: "Apple Symbols", "Segoe UI Symbol", serif; font-size: 40px; line-height: 1; }
 
+  aside {
+    width: 280px; flex: none; display: flex; flex-direction: column; gap: 12px; min-height: 0;
+    padding: 14px 16px 16px; box-sizing: border-box;
+    box-shadow: inset 0.5px 0 0 var(--wm-hairline);
+  }
+  aside[hidden] { display: none; }
+  aside h2 { margin: 0; font-size: 15px; font-weight: 600; }
+  aside .who { margin: -8px 0 0; font-size: 13px; color: var(--wm-text-dim); }
   .moves {
     flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 0; list-style: none;
-    font-size: 13px; font-variant-numeric: tabular-nums;
+    font-size: 15px; font-variant-numeric: tabular-nums;
   }
-  .moves li { display: grid; grid-template-columns: 34px 1fr 1fr; padding: 3px 6px; border-radius: 6px; }
+  .moves li { display: grid; grid-template-columns: 38px 1fr 1fr; padding: 4px 8px; border-radius: 6px; }
   .moves li:nth-child(odd) { background: var(--wm-fill); }
   .moves .n { color: var(--wm-text-dim); }
   .moves .latest { font-weight: 600; }
   .empty { font-size: 13px; color: var(--wm-text-dim); }
-
-  .promo, .confirm { display: none; flex-direction: column; gap: 8px; }
-  .promo.open, .confirm.open { display: flex; }
-  .promo p, .confirm p { margin: 0; font-size: 13px; }
-  .row { display: flex; gap: 6px; flex-wrap: wrap; }
-  .promo button { font-size: 13px; }
-  .promo .glyph { font-family: "Apple Symbols", "Segoe UI Symbol", serif; font-size: 18px; margin-right: 4px; }
+  .confirm { display: none; flex-direction: column; gap: 8px; }
+  .confirm.open { display: flex; }
+  .confirm p { margin: 0; font-size: 13px; }
   .seg { display: flex; background: var(--wm-fill); border-radius: var(--wm-radius, 6px); padding: 2px; }
   .seg button { flex: 1; }
   .seg button[aria-pressed="true"] { background: var(--wm-fill-strong); }
-
   .actions { display: flex; gap: 6px; }
   .actions button { flex: 1; }
   wm-notice { flex: none; }
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 </style>
 <main>
-  <header data-wm-drag>
-    <h1>Chess</h1>
-    <p id="context">Loading the game…</p>
-  </header>
-  <div class="body">
+  <div class="layout">
     <div class="stage">
-      <div class="board" id="board" role="grid" aria-label="Chess board"></div>
-    </div>
-    <aside>
-      <p class="status" id="status"></p>
-      <p class="hint" id="hint"></p>
-      <div class="promo" id="promo" role="group" aria-label="Promote the pawn">
-        <p>Promote the pawn to</p>
-        <div class="row" id="promoRow"></div>
+      <div class="frame">
+        <div class="top"><span class="status" id="status"></span><span class="hint" id="hint"></span></div>
+        <div class="ranks left" id="ranksL" aria-hidden="true"></div>
+        <div class="board" id="board" role="grid" aria-label="Chess board"></div>
+        <div class="ranks right" id="ranksR" aria-hidden="true"></div>
+        <div class="files" id="files" aria-hidden="true"></div>
+        <div class="corner">
+          <button type="button" id="panelToggle" aria-controls="panel" aria-expanded="false" aria-label="Show panel" title="Show panel">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2"/><path d="M10 3v10"/></svg>
+          </button>
+        </div>
       </div>
+      <div class="promo" id="promo" role="dialog" aria-label="Promote the pawn">
+        <div class="card">
+          <p>Promote the pawn to</p>
+          <div class="row" id="promoRow"></div>
+        </div>
+      </div>
+    </div>
+    <aside id="panel" hidden aria-label="Game panel">
+      <h2>Chess</h2>
+      <p class="who" id="context"></p>
       <ol class="moves" id="moves" aria-label="Moves played"></ol>
       <div class="confirm" id="confirm" role="group" aria-label="New game">
         <p>Start a new game, playing</p>
@@ -229,21 +275,18 @@
           s.textContent = GLYPH[p.toLowerCase()] + "︎";
           b.appendChild(s);
         }
-        if (col === 0) {
-          const c = document.createElement("span");
-          c.className = "coord rank";
-          c.textContent = sq[1];
-          b.appendChild(c);
-        }
-        if (row === 7) {
-          const c = document.createElement("span");
-          c.className = "coord file";
-          c.textContent = sq[0];
-          b.appendChild(c);
-        }
         rowEl.appendChild(b);
       }
       boardEl.appendChild(rowEl);
+    }
+    for (const [id, pick] of [["ranksL", (i) => order[i * 8][1]], ["ranksR", (i) => order[i * 8][1]], ["files", (i) => order[56 + i][0]]]) {
+      const el = $(id);
+      el.textContent = "";
+      for (let i = 0; i < 8; i++) {
+        const c = document.createElement("span");
+        c.textContent = pick(i);
+        el.appendChild(c);
+      }
     }
     if (hadFocus) boardEl.querySelector(`[data-sq="${focusSq}"]`)?.focus();
 
@@ -493,6 +536,17 @@
       announce(lm ? `${lm.side === "white" ? "White" : "Black"} played ${lm.san}. ${state.sentence}` : state.sentence);
     }
   });
+
+  function setPanel(open) {
+    $("panel").hidden = !open;
+    const t = $("panelToggle");
+    t.setAttribute("aria-expanded", String(open));
+    t.setAttribute("aria-label", open ? "Hide panel" : "Show panel");
+    t.title = open ? "Hide panel" : "Show panel";
+    try { localStorage.setItem("chess.panel", open ? "open" : "closed"); } catch {}
+  }
+  $("panelToggle").onclick = () => setPanel($("panel").hidden);
+  try { setPanel(localStorage.getItem("chess.panel") === "open"); } catch { setPanel(false); }
 
   wm.post({ type: "__ui_ready" });
 </script>
