@@ -196,6 +196,7 @@
       </div>
       <p class="fen" id="fen" aria-label="Position as FEN"></p>
       <div class="actions" id="mainActions">
+        <button type="button" id="replayBtn">Replay game</button>
         <button type="button" id="newGame">New game</button>
         <button type="button" id="hidePanel">Hide panel</button>
       </div>
@@ -227,7 +228,13 @@
   const seatSide = () => seat ?? state?.host ?? "white";
   const seatColor = () => (seatSide() === "black" ? "b" : "w");
   const cap = (s) => s[0].toUpperCase() + s.slice(1);
-  const myTurn = () => state && !state.over && state.turn === seatSide();
+  const myTurn = () => state && !replay && !state.over && state.turn === seatSide();
+
+  // A replay shows recorded positions one at a time and then the live one
+  // again. It only changes what this page draws: `state` stays the live game,
+  // and nothing is sent to main.ts while it runs.
+  let replay = null;       // { frames, i, delayMs, timer }
+  let noteShown = false;
 
   function pieceAt(sq) {
     const f = FILES.indexOf(sq[0]);
@@ -265,6 +272,59 @@
 
   function render() {
     if (!state) return;
+    if (!replay) return draw();
+    const live = state;
+    const f = replay.frames[replay.i];
+    state = {
+      ...live,
+      board: f.board,
+      turn: f.turn,
+      inCheck: f.inCheck,
+      lastMove: f.lastMove,
+      moves: live.moves.slice(0, f.ply),
+      legalMoves: [],
+      over: false,
+      toMoveIs: null,
+      sentence: f.ply ? `Replay ${f.label}` : "Replay: start position",
+    };
+    try {
+      draw();
+    } finally {
+      state = live;
+    }
+  }
+
+  function startReplay(frames, delayMs) {
+    if (replay) clearTimeout(replay.timer);
+    if (!Array.isArray(frames) || !frames.length) return;
+    selected = null;
+    pendingPromo = null;
+    flash = "";
+    replay = { frames, i: 0, delayMs: delayMs || 1000, timer: null };
+    showFrame();
+  }
+
+  function showFrame() {
+    render();
+    const f = replay.frames[replay.i];
+    announce(f.ply ? `Replay ${f.label}` : "Replay from the start position");
+    replay.timer = setTimeout(() => {
+      if (!replay) return;
+      if (replay.i + 1 >= replay.frames.length) return stopReplay(true);
+      replay.i++;
+      showFrame();
+    }, replay.delayMs);
+  }
+
+  function stopReplay(finished) {
+    if (!replay) return;
+    clearTimeout(replay.timer);
+    replay = null;
+    render();
+    announce(`${finished ? "Replay finished" : "Replay stopped"}. ${state.sentence}`);
+  }
+
+  function draw() {
     const order = drawOrder();
     const targets = selected ? movesFrom(selected) : [];
     const targetSet = new Set(targets.map((m) => m.uci.slice(2, 4)));
@@ -371,10 +431,16 @@
       list.scrollTop = list.scrollHeight;
     }
     $("newGame").className = state.over ? "primary" : "";
+    $("replayBtn").textContent = replay ? "Stop replay" : "Replay game";
+    $("replayBtn").disabled = !replay && !state.moves.length;
     $("promo").classList.toggle("open", !!pendingPromo);
   }
 
   function hintText() {
+    if (replay) {
+      const f = replay.frames[replay.i];
+      return `Move ${f.ply} of ${replay.frames.length - 1}. Press Escape to stop.`;
+    }
     if (flash) return flash;
     if (state.over) return state.result === "1/2-1/2" ? "Result ½–½." : `Result ${state.result}.`;
     if (!myTurn()) return `Waiting for ${cap(state.turn)} to move.`;
@@ -415,6 +481,8 @@
 
   function choose(sq) {
     if (!state) return;
+    // A click on the board means "back to the game".
+    if (replay) return stopReplay(false);
     focusSq = sq;
     flash = "";
     if (pendingPromo) return;
@@ -528,7 +596,10 @@
   // keeps no focus in some engines, so the board's own handler may not hear it.
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape" || e.defaultPrevented) return;
-    if (pendingPromo || selected) {
+    if (replay) {
+      e.preventDefault();
+      stopReplay(false);
+    } else if (pendingPromo || selected) {
       e.preventDefault();
       cancel();
     } else if (!$("panel").hidden && matchMedia("(max-width: 640px)").matches) {
@@ -536,6 +607,11 @@
       $("panelToggle").focus();
     }
   });
+
+  $("replayBtn").onclick = () => {
+    if (replay) stopReplay(false);
+    else wm.post({ type: "replay" });
+  };
 
   $("newGame").onclick = () => {
     newSide = state?.host || "white";
@@ -571,6 +647,8 @@
   });
 
   wm.onMessage((msg) => {
+    if (msg.type === "replay") return startReplay(msg.frames, msg.delayMs);
+    if (msg.type === "replayStop") return stopReplay(false);
     if (msg.type === "state" || msg.type === "refused") {
       const prevKey = state ? state.fen + state.moves.length : null;
       state = msg.state;
@@ -585,6 +663,10 @@
         if (!pieceAt(focusSq) && state.lastMove) focusSq = state.lastMove.uci.slice(2, 4);
       }
       if (msg.type === "refused") showNotice(msg.message);
+      if (state.restoreNote && !noteShown) {
+        noteShown = true;
+        showNotice(state.restoreNote);
+      }
       render();
       const lm = state.lastMove;
       announce(lm ? `${lm.side === "white" ? "White" : "Black"} played ${lm.san}. ${state.sentence}` : state.sentence);
@@ -595,6 +677,7 @@
     e.preventDefault();
     const text = $("moveInput").value.trim();
     if (!text || !state) return;
+    if (replay) stopReplay(false);
     selected = null;
     pendingPromo = null;
     showNotice("");

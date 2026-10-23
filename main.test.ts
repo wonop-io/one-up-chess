@@ -224,3 +224,108 @@ Deno.test("the game survives a reload, and a new game can give the host Black", 
   const r = again.c.resign({ side: "white" });
   assertEquals([r.sentence, r.result], ["White resigned. Black wins.", "0-1"]);
 });
+
+// The live game from the stream, 26. Qa4 Rcd8 with White to move, as saved in
+// replay-position-backup.json. Replay and persistence are checked against it.
+const STREAM_GAME = JSON.parse(await Deno.readTextFile(new URL("./fixtures/stream-game.json", import.meta.url)));
+
+async function streamGame() {
+  const h = await harness();
+  h.play(...STREAM_GAME.moves);
+  return h;
+}
+
+Deno.test("the stream game is reproduced exactly", async () => {
+  const { c } = await streamGame();
+  const s = c.state();
+  assertEquals([s.fen, s.turn, s.moveNumber, s.pgn], [STREAM_GAME.fen, "white", 27, STREAM_GAME.pgn]);
+  assertEquals(s.board, STREAM_GAME.board);
+});
+
+Deno.test("replay sends every position and changes nothing", async () => {
+  const h = await streamGame();
+  const before = JSON.stringify(h.c.state());
+  const stored = JSON.stringify(h.store);
+  h.posts.length = 0;
+  h.emitted.length = 0;
+  assertEquals(h.c.replay({}), { plies: 52, delayMs: 1000, seconds: 52 });
+  const msg = h.posts[0];
+  assertEquals([msg.type, msg.delayMs, msg.frames.length], ["replay", 1000, 53]);
+  assertEquals(msg.frames[0].board[0], "r n b q k b n r");
+  assertEquals([msg.frames[0].label, msg.frames[0].lastMove], ["Start position", null]);
+  assertEquals([msg.frames[1].label, msg.frames[1].lastMove.uci, msg.frames[1].turn], ["1. Nc3", "b1c3", "black"]);
+  assertEquals(msg.frames[2].label, "1… d5");
+  assertEquals(msg.frames[12].label, "6… O-O");
+  const last = msg.frames[52];
+  assertEquals([last.label, last.lastMove.san, last.board], ["26… Rcd8", "Rcd8", STREAM_GAME.board]);
+  // Nothing about the game moved: not the state, not the store, no output.
+  assertEquals(JSON.stringify(h.c.state()), before);
+  assertEquals(JSON.stringify(h.store), stored);
+  assertEquals(h.emitted, []);
+  assertEquals(h.c.replay({ delayMs: 250 }).seconds, 13);
+  assertRefused(() => h.c.replay({ delayMs: 5 }), /between 100 and 10000/);
+  assertEquals(h.c.stopReplay(), { stopped: true });
+});
+
+Deno.test("a window asking for a replay gets it alone, and the game is untouched", async () => {
+  const h = await streamGame();
+  const stored = JSON.stringify(h.store);
+  h.posts.length = 0;
+  const sent: unknown[] = [];
+  (globalThis as any).app.ui.post = (payload: unknown, windowId?: string) => sent.push([payload, windowId]);
+  h.spec.onMessage({ payload: { type: "replay" }, windowId: "w9" });
+  assertEquals((sent[0] as any)[1], "w9");
+  assertEquals((sent[0] as any)[0].frames.length, 53);
+  assertEquals(JSON.stringify(h.store), stored);
+});
+
+Deno.test("the game survives closing and reopening, and reopening writes nothing", async () => {
+  const first = await streamGame();
+  const saved = JSON.parse(JSON.stringify(first.store));
+  assertEquals(saved.version, 2);
+  const reopened = await harness(saved);
+  const s = reopened.c.state();
+  assertEquals([s.fen, s.turn, s.moves, s.restoreNote], [STREAM_GAME.fen, "white", STREAM_GAME.moves, null]);
+  assertEquals(s.lastMove, { uci: "c8d8", san: "Rcd8", side: "black", by: "assistant" });
+  assertEquals(reopened.store, saved, "a clean restore leaves the store as it was");
+  // And the reopened game plays on.
+  assertEquals(reopened.c.move({ move: "Qxe8+", side: "white" }).played.san, "Qxe8+");
+});
+
+Deno.test("a game saved by the earlier version restores", async () => {
+  const first = await streamGame();
+  const legacy = { game: first.store.game }; // version 1 kept only { game }
+  const s = (await harness(legacy)).c.state();
+  assertEquals([s.fen, s.moves.length], [STREAM_GAME.fen, 52]);
+});
+
+Deno.test("damaged saves keep what replays and set the rest aside", async () => {
+  const first = await streamGame();
+  const damaged = JSON.parse(JSON.stringify(first.store));
+  damaged.game.moves[30].uci = "e2e4"; // ply 31 (16. d5) no longer legal there
+  const h = await harness(damaged);
+  const s = h.c.state();
+  assertEquals(s.moves.length, 30);
+  assertEquals(s.moves.slice(-1), ["Rc8"]);
+  if (!/move 31 \(e2e4\) did not replay.*30 moves were kept/.test(s.restoreNote)) throw new Error(s.restoreNote);
+  assertEquals(h.store.rejected.reason, "move 31 (e2e4) did not replay");
+  assertEquals(h.store.rejected.data.moves.length, 52, "the damaged copy is kept whole");
+
+  for (const junk of [null, "nonsense", 42, { game: "x" }, { game: { startFen: "not a fen", moves: [] } }, { game: { moves: "x" } }]) {
+    const j = await harness(junk);
+    assertEquals(j.c.state().fen, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+  }
+  const tampered = JSON.parse(JSON.stringify(first.store));
+  tampered.game.moves[51].fen = "8/8/8/8/8/8/8/K6k w - - 0 1"; // a stored position is never trusted
+  assertEquals((await harness(tampered)).c.state().fen, STREAM_GAME.fen);
+});
+
+Deno.test("a new game puts the old one aside instead of losing it", async () => {
+  const h = await streamGame();
+  h.c.newGame({});
+  assertEquals(h.c.state().moves, []);
+  const prev = h.c.previousGames().games;
+  assertEquals([prev.length, prev[0].pgn, prev[0].result, prev[0].moves], [1, STREAM_GAME.pgn, "*", 52]);
+  const reopened = await harness(JSON.parse(JSON.stringify(h.store)));
+  assertEquals(reopened.c.previousGames().games[0].pgn, STREAM_GAME.pgn);
+});

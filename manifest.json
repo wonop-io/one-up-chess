@@ -39,6 +39,19 @@
       "returns": { "sentence": "string", "fen": "string" },
       "effect": "write"
     },
+    "replay": {
+      "help": "show the whole game move by move in the board window (delayMs per half-move, 1000 by default), then return to the live position; changes nothing",
+      "args": { "delayMs": "number?" },
+      "returns": { "plies": "number", "delayMs": "number", "seconds": "number" }
+    },
+    "previousGames": {
+      "help": "the last five games a new game or loadFen replaced, newest first, as PGN with their result",
+      "returns": { "games": "object[]" }
+    },
+    "stopReplay": {
+      "help": "stop a running replay and show the live position again",
+      "returns": { "stopped": "boolean" }
+    },
     "resign": {
       "help": "resign the game for one side (white or black)",
       "args": { "side": "string" },

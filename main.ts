@@ -482,33 +482,94 @@ function freshGame(hostSide: Side = "white", startFen = START_FEN): Game {
   return { startFen, hostSide, moves: [], resigned: null };
 }
 
-function loadGame(): Game {
-  const saved = app.store.get()?.game;
-  if (!saved || typeof saved.startFen !== "string" || !Array.isArray(saved.moves)) return freshGame();
+// What app.store holds: the game being played, the last few games it
+// replaced, and anything that could not be restored, kept rather than lost.
+// It survives a reload, quitting Wonop and an update. Version 1 was { game }.
+const STORE_VERSION = 2;
+const KEEP_PREVIOUS = 5;
+
+// Rebuild a saved game by replaying its moves from its starting position,
+// so nothing in the store is trusted as it stands. A move that no longer
+// replays ends the restore there: the moves before it are kept.
+function restore(saved: any): { game: Game; problem: string | null } {
+  if (!saved || typeof saved !== "object") return { game: freshGame(), problem: null };
+  const hostSide: Side = saved.hostSide === "black" ? "black" : "white";
+  let pos: Position;
   try {
-    // Replay rather than trust: a game that no longer replays starts again.
-    let pos = parseFen(saved.startFen);
-    for (const mv of saved.moves) pos = makeMove(pos, findMove(pos, mv.uci));
-    return saved as Game;
+    pos = parseFen(typeof saved.startFen === "string" ? saved.startFen : START_FEN);
   } catch {
-    return freshGame();
+    return { game: freshGame(hostSide), problem: "its starting position could not be read" };
   }
+  const startFen = toFen(pos);
+  const moves: Played[] = [];
+  let problem: string | null = Array.isArray(saved.moves) ? null : "it had no list of moves";
+  for (const mv of Array.isArray(saved.moves) ? saved.moves : []) {
+    try {
+      const side = sideOf(pos.turn);
+      const m = findMove(pos, mv?.uci);
+      const san = sanOf(pos, m, legalMoves(pos));
+      pos = makeMove(pos, m);
+      const by = mv?.by === "host" || mv?.by === "assistant" ? mv.by : side === hostSide ? "host" : "assistant";
+      moves.push({ uci: uciOf(m), san, side, by, fen: toFen(pos) });
+    } catch {
+      problem = `move ${moves.length + 1} (${String(mv?.uci)}) did not replay`;
+      break;
+    }
+  }
+  const resigned = saved.resigned === "white" || saved.resigned === "black" ? saved.resigned : null;
+  return { game: { startFen, hostSide, moves, resigned }, problem };
+}
+
+let previousGames: Game[] = [];
+let rejected: { at: number; reason: string; data: unknown } | null = null;
+let restoreNote: string | null = null;
+
+function loadGame(): Game {
+  let stored: any = null;
+  try {
+    stored = app.store.get();
+  } catch {
+    stored = null;
+  }
+  previousGames = (Array.isArray(stored?.previous) ? stored.previous : [])
+    .map((g: unknown) => restore(g))
+    .filter((r: { problem: string | null }) => !r.problem)
+    .map((r: { game: Game }) => r.game)
+    .slice(0, KEEP_PREVIOUS);
+  rejected = stored?.rejected ?? null;
+  const { game: restored, problem } = restore(stored?.game);
+  if (problem) {
+    // Keep what could not be restored, so a person can recover it by hand.
+    rejected = { at: Date.now(), reason: problem, data: stored.game };
+    restoreNote = `The saved game could not be fully restored: ${problem}. ` +
+      `${restored.moves.length} moves were kept, and the saved copy is kept aside.`;
+  }
+  return restored;
 }
 
 let game: Game = loadGame();
+if (restoreNote) save();
 
 function save() {
-  app.store.set({ game });
+  const value: Record<string, unknown> = { version: STORE_VERSION, game, previous: previousGames };
+  if (rejected) value.rejected = rejected;
+  app.store.set(value);
+}
+
+// A game is put aside, not dropped, when a new one replaces it.
+function archive() {
+  if (!game.moves.length) return;
+  previousGames = [game, ...previousGames].slice(0, KEEP_PREVIOUS);
 }
 
 function position(): Position {
   return parseFen(game.moves.length ? game.moves[game.moves.length - 1].fen : game.startFen);
 }
 
-function outcome(pos: Position, legal: Move[]) {
-  if (game.resigned) {
-    const winner = game.resigned === "white" ? "black" : "white";
-    return { status: "resigned", winner, reason: `${cap(game.resigned)} resigned` };
+function outcome(pos: Position, legal: Move[], g: Game = game) {
+  if (g.resigned) {
+    const winner = g.resigned === "white" ? "black" : "white";
+    return { status: "resigned", winner, reason: `${cap(g.resigned)} resigned` };
   }
   const check = inCheck(pos, pos.turn);
   if (!legal.length) {
@@ -518,10 +579,68 @@ function outcome(pos: Position, legal: Move[]) {
   }
   if (insufficientMaterial(pos)) return { status: "draw", winner: null, reason: "insufficient material" };
   if (pos.halfmove >= 100) return { status: "draw", winner: null, reason: "the fifty-move rule" };
-  const keys = [parseFen(game.startFen), ...game.moves.map((m) => parseFen(m.fen))].map(repetitionKey);
+  const keys = [parseFen(g.startFen), ...g.moves.map((m) => parseFen(m.fen))].map(repetitionKey);
   const now = keys[keys.length - 1];
   if (keys.filter((k) => k === now).length >= 3) return { status: "draw", winner: null, reason: "threefold repetition" };
   return { status: check ? "check" : "playing", winner: null, reason: null };
+}
+
+// The result of any game as PGN writes it: "1-0", "0-1", "1/2-1/2" or "*".
+function outcomeOf(g: Game): string {
+  const pos = parseFen(g.moves.length ? g.moves[g.moves.length - 1].fen : g.startFen);
+  const out = outcome(pos, legalMoves(pos), g);
+  if (out.status === "playing" || out.status === "check") return "*";
+  return out.winner === "white" ? "1-0" : out.winner === "black" ? "0-1" : "1/2-1/2";
+}
+
+function pgnOf(g: Game): string {
+  const startPos = parseFen(g.startFen);
+  let pgn = "";
+  g.moves.forEach((m, i) => {
+    const ply = i + (startPos.turn === "b" ? 1 : 0);
+    const number = startPos.fullmove + Math.floor(ply / 2);
+    if (ply % 2 === 0) pgn += `${pgn ? " " : ""}${number}. ${m.san}`;
+    else pgn += i === 0 ? `${number}... ${m.san}` : ` ${m.san}`;
+  });
+  return pgn;
+}
+
+function boardRows(pos: Position): string[] {
+  const rows: string[] = [];
+  for (let r = 7; r >= 0; r--) {
+    rows.push(pos.board.slice(r * 8, r * 8 + 8).map((p) => p ?? ".").join(" "));
+  }
+  return rows;
+}
+
+// Every position of the game, from where it started to now, for a window to
+// step through. Built from the stored game and never written back: a replay
+// is something to watch, not a change to the game.
+function replayFrames() {
+  const start = parseFen(game.startFen);
+  const frame = (pos: Position, ply: number, label: string, last: Played | null) => ({
+    ply,
+    label,
+    board: boardRows(pos),
+    turn: sideOf(pos.turn),
+    inCheck: inCheck(pos, pos.turn),
+    lastMove: last && { uci: last.uci, san: last.san, side: last.side },
+  });
+  const frames = [frame(start, 0, "Start position", null)];
+  game.moves.forEach((m, i) => {
+    const ply = i + (start.turn === "b" ? 1 : 0);
+    const number = start.fullmove + Math.floor(ply / 2);
+    const label = `${number}${ply % 2 === 0 ? "." : "…"} ${m.san}`;
+    frames.push(frame(parseFen(m.fen), i + 1, label, m));
+  });
+  return frames;
+}
+
+function replayDelay(value: unknown): number {
+  if (value === undefined || value === null) return 1000;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 100 || n > 10000) refuse("invalid_args", "delayMs must be between 100 and 10000.");
+  return Math.round(n);
 }
 
 function describe() {
@@ -539,18 +658,8 @@ function describe() {
   else if (out.status === "resigned") sentence = `${out.reason}. ${cap(out.winner!)} wins.`;
   else sentence = `${out.status === "check" ? "Check. " : ""}${cap(toMove)} to move.`;
   const result = !over ? "*" : out.winner === "white" ? "1-0" : out.winner === "black" ? "0-1" : "1/2-1/2";
-  const board: string[] = [];
-  for (let r = 7; r >= 0; r--) {
-    board.push(pos.board.slice(r * 8, r * 8 + 8).map((p) => p ?? ".").join(" "));
-  }
-  const startPos = parseFen(game.startFen);
-  let pgn = "";
-  game.moves.forEach((m, i) => {
-    const ply = i + (startPos.turn === "b" ? 1 : 0);
-    const number = startPos.fullmove + Math.floor(ply / 2);
-    if (ply % 2 === 0) pgn += `${pgn ? " " : ""}${number}. ${m.san}`;
-    else pgn += i === 0 ? `${number}... ${m.san}` : ` ${m.san}`;
-  });
+  const board = boardRows(pos);
+  const pgn = pgnOf(game);
   const last = game.moves[game.moves.length - 1] ?? null;
   return {
     sentence,
@@ -572,6 +681,7 @@ function describe() {
     pgn,
     lastMove: last && { uci: last.uci, san: last.san, side: last.side, by: last.by },
     legalMoves: over ? [] : legal.map((m) => ({ uci: uciOf(m), san: sanOf(pos, m, legal) })),
+    restoreNote,
   };
 }
 
@@ -645,6 +755,8 @@ app.define({
     },
 
     newGame({ hostSide }: { hostSide?: string } = {}) {
+      archive();
+      restoreNote = null;
       game = freshGame(parseSide(hostSide, "hostSide") ?? game.hostSide);
       save();
       app.emit("moves", "New game");
@@ -653,10 +765,35 @@ app.define({
 
     loadFen({ fen, hostSide }: { fen: string; hostSide?: string }) {
       const pos = parseFen(fen);
+      archive();
+      restoreNote = null;
       game = freshGame(parseSide(hostSide, "hostSide") ?? game.hostSide, toFen(pos));
       save();
       app.emit("moves", `Position set: ${game.startFen}`);
       return publish();
+    },
+
+    // Shows the game move by move in every board window, then the live
+    // position again. Changes nothing: moves sent meanwhile are still played.
+    replay({ delayMs }: { delayMs?: number } = {}) {
+      const delay = replayDelay(delayMs);
+      const frames = replayFrames();
+      app.ui.post({ type: "replay", frames, delayMs: delay });
+      return { plies: frames.length - 1, delayMs: delay, seconds: Math.round(((frames.length - 1) * delay) / 100) / 10 };
+    },
+
+    previousGames() {
+      return {
+        games: previousGames.map((g) => {
+          const out = outcomeOf(g);
+          return { pgn: pgnOf(g), moves: g.moves.length, startFen: g.startFen, host: g.hostSide, result: out };
+        }),
+      };
+    },
+
+    stopReplay() {
+      app.ui.post({ type: "replayStop" });
+      return { stopped: true };
     },
 
     resign({ side }: { side: string }) {
@@ -679,6 +816,14 @@ app.define({
     // A window connected or reloaded: it keeps nothing of its own.
     if (msg?.type === "__ui_ready") {
       app.ui.post({ type: "state", state: describe() }, windowId);
+      return;
+    }
+    if (msg?.type === "replay") {
+      try {
+        app.ui.post({ type: "replay", frames: replayFrames(), delayMs: replayDelay(msg.delayMs) }, windowId);
+      } catch (e: any) {
+        app.ui.post({ type: "refused", message: e?.message ?? String(e), state: describe() }, windowId);
+      }
       return;
     }
     // A window moves the side it plays (the host's unless it chose another),

@@ -56,6 +56,9 @@ interface ChessState {
   lastMove: (ChessMove & { side: ChessSide; by: "host" | "assistant" }) | null;
   /** Every legal move for the side to move; empty once the game is over. */
   legalMoves: ChessMove[];
+  /** Set when the saved game could not be fully restored on opening: what
+   *  was kept, and that the saved copy was put aside. Otherwise null. */
+  restoreNote: string | null;
 }
 
 /** A refusal: `code` is "invalid_args" (an illegal or unreadable move, a bad
@@ -90,4 +93,15 @@ interface ChessApi {
 
   /** End the game for one side. */
   resign(args: { side: ChessSide }): Promise<ChessState>;
+
+  /** Show the game move by move in every board window, `delayMs` per
+   *  half-move (100 to 10000, default 1000), then the live position again.
+   *  It changes nothing: the game, its moves and its storage stay as they are. */
+  replay(args?: { delayMs?: number }): Promise<{ plies: number; delayMs: number; seconds: number }>;
+
+  /** Stop a running replay. */
+  stopReplay(): Promise<{ stopped: boolean }>;
+
+  /** The last five games a new game or loadFen replaced, newest first. */
+  previousGames(): Promise<{ games: { pgn: string; moves: number; startFen: string; host: ChessSide; result: string }[] }>;
 }
