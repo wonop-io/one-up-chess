@@ -146,6 +146,7 @@
   let pendingPromo = null; // { from, to }
   let newSide = "white";
   let lastAnnounced = "";
+  let flash = "";          // why the last click did nothing; cleared by the next one
 
   const hostColor = () => (state?.host === "black" ? "b" : "w");
   const myTurn = () => state && !state.over && state.toMoveIs === "host";
@@ -292,6 +293,7 @@
   }
 
   function hintText() {
+    if (flash) return flash;
     if (state.over) return state.result === "1/2-1/2" ? "Result ½–½." : `Result ${state.result}.`;
     if (!myTurn()) return "Waiting for the assistant to move.";
     if (pendingPromo) return "Choose a piece, or press Escape.";
@@ -300,6 +302,12 @@
       return n ? `Pick a square for the ${describePiece(pieceAt(selected))}.` : "That piece has no legal move.";
     }
     return "Your move. Pick a piece.";
+  }
+
+  function say(text) {
+    flash = text;
+    lastAnnounced = "";
+    announce(text);
   }
 
   function announce(text) {
@@ -326,6 +334,7 @@
   function choose(sq) {
     if (!state) return;
     focusSq = sq;
+    flash = "";
     if (pendingPromo) return;
     const p = pieceAt(sq);
     if (selected) {
@@ -344,17 +353,21 @@
     if (p && colorOf(p) === hostColor()) {
       if (!myTurn()) {
         selected = null;
+        if (state.over) say("The game is over. Start a new game to play again.");
+        else say(`It is ${state.turn === "white" ? "White" : "Black"}'s turn. Wait for the assistant to move.`);
         render();
-        if (!state.over) $("hint").textContent = "It is the assistant's turn.";
         return;
       }
       selected = selected === sq ? null : sq;
       render();
       return;
     }
-    if (selected && myTurn()) {
-      $("hint").textContent = `The ${describePiece(pieceAt(selected))} cannot move to ${sq}.`;
-      announce(`Not a legal move: ${selected} to ${sq}.`);
+    if (state.over) {
+      say("The game is over. Start a new game to play again.");
+    } else if (selected && myTurn()) {
+      say(`Not a legal move: the ${describePiece(pieceAt(selected))} on ${selected} cannot go to ${sq}.`);
+    } else if (p) {
+      say(`That is a ${describePiece(p)}. You play ${state.host}.`);
     }
     selected = null;
     render();
@@ -467,6 +480,7 @@
       state = msg.state;
       const changed = prevKey !== state.fen + state.moves.length;
       if (changed) {
+        flash = "";
         selected = null;
         pendingPromo = null;
         if (msg.type === "state") showNotice("");
