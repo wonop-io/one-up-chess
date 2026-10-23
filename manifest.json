@@ -1,36 +1,59 @@
 {
   "id": "two-player-game",
   "apiVersion": 1,
-  "name": "Two-Player Game",
-  "version": "0.1.0",
-  "description": "SETUP ONLY. App implementation owner for Two-Player Game. Game type/rules unspecified: await user brief, do NOT invent game or implement anything beyond generated scaffold. Host will play one side and assistant the other. Two testing agents will do real hands-on two-sided QA once ready. Acknowledge and wait. Work only in this separate repo, never Wonop main or Social Media Cards.",
+  "name": "Chess",
+  "version": "0.2.0",
+  "description": "Chess for two: the host plays one side on the board, the assistant the other through commands. Full rules, with illegal moves refused.",
   "icon": "icon.svg",
   "entry": "main.ts",
   "ui": "ui/index.html",
-  "window": { "width": 520, "height": 360 },
+  "window": { "width": 780, "height": 580 },
   "strictArgs": true,
   "commands": {
-    "greet": {
-      "help": "say hello to someone",
-      "args": { "who": "string" },
-      "returns": { "said": "string" }
+    "state": {
+      "help": "the game: whose turn, check/checkmate/stalemate/draw, the board, FEN, moves played and every legal move",
+      "returns": { "sentence": "string", "status": "string", "turn": "string", "fen": "string", "board": "string[]", "moves": "string[]", "legalMoves": "object[]" },
+      "effect": "read"
     },
-    "history": {
-      "help": "everything a window has been told to say",
-      "returns": { "lines": "string[]" }
+    "legalMoves": {
+      "help": "the legal moves for the side to move, or only those from one square (e2)",
+      "args": { "square": "string?" },
+      "returns": { "turn": "string", "moves": "object[]" },
+      "effect": "read"
+    },
+    "move": {
+      "help": "play a move as UCI (e2e4, e7e8q) or SAN (Nf3, O-O); pass side to refuse it when it is not that side's turn",
+      "args": { "move": "string", "side": "string?" },
+      "returns": { "played": "object", "sentence": "string", "fen": "string" },
+      "effect": "write"
+    },
+    "newGame": {
+      "help": "start again from the opening position; hostSide is the side the window plays (white by default)",
+      "args": { "hostSide": "string?" },
+      "returns": { "sentence": "string", "fen": "string" },
+      "effect": "write"
+    },
+    "loadFen": {
+      "help": "set up a position from a FEN, for testing a rule; the game starts from it",
+      "args": { "fen": "string", "hostSide": "string?" },
+      "returns": { "sentence": "string", "fen": "string" },
+      "effect": "write"
+    },
+    "resign": {
+      "help": "resign the game for one side (white or black)",
+      "args": { "side": "string" },
+      "returns": { "sentence": "string", "result": "string" },
+      "effect": "write"
     }
   },
-  "inputs": {
-    "say": { "help": "text to show in the window" }
-  },
   "outputs": {
-    "said": { "help": "everything this app has been told to say" }
+    "moves": { "help": "one line per move played, new game or position set" }
   },
   "palette": [
     {
-      "title": "Greet someone (two-player-game)",
-      "snippet": "await wm.apps[\"two-player-game\"].greet({ who: {who} })",
-      "args": [{ "name": "who", "type": "string", "default": "world" }]
+      "title": "New chess game",
+      "snippet": "await wm.apps[\"two-player-game\"].newGame({})",
+      "args": []
     }
   ],
   "permissions": {}
