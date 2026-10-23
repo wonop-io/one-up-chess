@@ -1,0 +1,37 @@
+{
+  "id": "two-player-game",
+  "apiVersion": 1,
+  "name": "Two-Player Game",
+  "version": "0.1.0",
+  "description": "SETUP ONLY. App implementation owner for Two-Player Game. Game type/rules unspecified: await user brief, do NOT invent game or implement anything beyond generated scaffold. Host will play one side and assistant the other. Two testing agents will do real hands-on two-sided QA once ready. Acknowledge and wait. Work only in this separate repo, never Wonop main or Social Media Cards.",
+  "icon": "icon.svg",
+  "entry": "main.ts",
+  "ui": "ui/index.html",
+  "window": { "width": 520, "height": 360 },
+  "strictArgs": true,
+  "commands": {
+    "greet": {
+      "help": "say hello to someone",
+      "args": { "who": "string" },
+      "returns": { "said": "string" }
+    },
+    "history": {
+      "help": "everything a window has been told to say",
+      "returns": { "lines": "string[]" }
+    }
+  },
+  "inputs": {
+    "say": { "help": "text to show in the window" }
+  },
+  "outputs": {
+    "said": { "help": "everything this app has been told to say" }
+  },
+  "palette": [
+    {
+      "title": "Greet someone (two-player-game)",
+      "snippet": "await wm.apps[\"two-player-game\"].greet({ who: {who} })",
+      "args": [{ "name": "who", "type": "string", "default": "world" }]
+    }
+  ],
+  "permissions": {}
+}
