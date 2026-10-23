@@ -7,7 +7,7 @@
   "icon": "icon.svg",
   "entry": "main.ts",
   "ui": "ui/index.html",
-  "window": { "width": 780, "height": 580 },
+  "window": { "title": "Chess", "width": 780, "height": 580 },
   "strictArgs": true,
   "commands": {
     "state": {
