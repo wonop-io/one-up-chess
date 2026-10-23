@@ -110,6 +110,14 @@
     box-shadow: inset 0.5px 0 0 var(--wm-hairline);
   }
   aside[hidden] { display: none; }
+  /* In a narrow window the panel floats over the board instead of shrinking it. */
+  @media (max-width: 640px) {
+    .layout { position: relative; }
+    aside {
+      position: absolute; top: 0; right: 0; bottom: 0; width: min(300px, 86vw); z-index: 4;
+      background: var(--wm-surface); box-shadow: -12px 0 32px rgb(0 0 0 / 0.35);
+    }
+  }
   aside h2 { margin: 0; font-size: 15px; font-weight: 600; }
   aside .who { margin: -8px 0 0; font-size: 13px; color: var(--wm-text-dim); }
   .moves {
@@ -189,6 +197,7 @@
       <p class="fen" id="fen" aria-label="Position as FEN"></p>
       <div class="actions" id="mainActions">
         <button type="button" id="newGame">New game</button>
+        <button type="button" id="hidePanel">Hide panel</button>
       </div>
     </aside>
   </div>
@@ -506,12 +515,22 @@
       e.preventDefault();
       choose(b.dataset.sq);
     } else if (e.key === "Escape") {
+      e.preventDefault();
       cancel();
     }
   });
 
+  // Escape lets go of a picked piece wherever focus is: a clicked square
+  // keeps no focus in some engines, so the board's own handler may not hear it.
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && pendingPromo) cancel();
+    if (e.key !== "Escape" || e.defaultPrevented) return;
+    if (pendingPromo || selected) {
+      e.preventDefault();
+      cancel();
+    } else if (!$("panel").hidden && matchMedia("(max-width: 640px)").matches) {
+      setPanel(false);
+      $("panelToggle").focus();
+    }
   });
 
   $("newGame").onclick = () => {
@@ -596,6 +615,10 @@
     try { localStorage.setItem("chess.panel", open ? "open" : "closed"); } catch {}
   }
   $("panelToggle").onclick = () => setPanel($("panel").hidden);
+  $("hidePanel").onclick = () => {
+    setPanel(false);
+    $("panelToggle").focus();
+  };
   try { setPanel(localStorage.getItem("chess.panel") === "open"); } catch { setPanel(false); }
 
   wm.post({ type: "__ui_ready" });
