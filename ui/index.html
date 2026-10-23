@@ -493,7 +493,11 @@
 
   boardEl.addEventListener("click", (e) => {
     const b = e.target.closest(".sq");
-    if (b) choose(b.dataset.sq);
+    if (!b) return;
+    choose(b.dataset.sq);
+    // Keep the keyboard where the click was, so arrows and Enter carry on from
+    // here: macOS does not focus a clicked button by itself.
+    if (!pendingPromo) boardEl.querySelector(`[data-sq="${b.dataset.sq}"]`)?.focus();
   });
 
   boardEl.addEventListener("keydown", (e) => {
